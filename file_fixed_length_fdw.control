@@ -1,0 +1,5 @@
+# file_fixed_length_fdw extension
+comment = 'foreign-data wrapper for a simple SNMP query'
+default_version = '1.0'
+module_pathname = '$libdir/file_fixed_length_fdw'
+relocatable = true
