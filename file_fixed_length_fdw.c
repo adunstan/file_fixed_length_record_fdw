@@ -78,7 +78,6 @@ typedef struct FileFixedLengthFdwExecutionState
 	record_sep sep;
 	/* work space */
 	char           *read_buf;
-	char          **raw_fields;
     Datum          *text_array_values;
     bool           *text_array_nulls;	
 } FileFixedLengthFdwExecutionState;
@@ -514,9 +513,6 @@ file_fixed_lengthBeginForeignScan(ForeignScanState *node, int eflags)
 
 	/* set up work space */
 
-	festate->raw_fields = palloc(festate->nfields * sizeof(char *));
-	for (i = 0; i < festate->nfields; i++)
-		festate->raw_fields[i] = palloc((festate->field_lengths[i] +1) * sizeof(char));
 	festate->read_buf = palloc(festate->read_len * sizeof(char));
 	festate->text_array_values = palloc(festate->nfields * sizeof(Datum));
 	festate->text_array_nulls = palloc(festate->nfields * sizeof(bool));
@@ -725,13 +721,8 @@ NextFixedLengthRawFields(FileFixedLengthFdwExecutionState *festate)
 				(errcode(ERRCODE_FDW_INVALID_STRING_LENGTH_OR_BUFFER_LENGTH),
 				 errmsg("error reading fixed length record")));
 
-	for (i=0; i < festate->nfields; i++)
-	{
-		memcpy(festate->raw_fields[i], pos, festate->field_lengths[i]);
-		*(festate->raw_fields[i] +festate->field_lengths[i]) = '\0'; /* redundant ? */
-		pos += festate->field_lengths[i];
-	}
 	/* XXX todo: check record seps, etc */
+
 	return true;
 }
 
@@ -749,9 +740,7 @@ makeTextArray(FileFixedLengthFdwExecutionState *festate, TupleTableSlot *slot)
 	int        fld;
 	Datum      result;
 	int        fldct = festate->nfields;
-	char      *string;
-	char     **raw_fields = festate->raw_fields;
-
+	char      *string = festate->read_buf;
 	values = festate->text_array_values;
 	nulls = festate->text_array_nulls;
 
@@ -760,11 +749,14 @@ makeTextArray(FileFixedLengthFdwExecutionState *festate, TupleTableSlot *slot)
 
 	for (fld=0; fld < fldct; fld++)
 	{
-		string = raw_fields[fld];
 
+		/* make sure encoding is OK, including no null bytes */
+		(void) pg_verifymbstr(string, festate->field_lengths[fld], false);
+ 
 		values[fld] = PointerGetDatum(
-			DirectFunctionCall1(textin, 
-								PointerGetDatum(string)));
+			cstring_to_text_with_len(string, festate->field_lengths[fld]));
+
+		string += festate->field_lengths[fld];
 	}
 
 	result = PointerGetDatum(construct_md_array(
