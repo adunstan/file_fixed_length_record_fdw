@@ -1,7 +1,8 @@
 /*-------------------------------------------------------------------------
  *
  * file_fixed_length_fdw.c
- *		  foreign-data wrapper for SNMPquery       
+ *		  foreign-data wrapper for files with fixed length fields and
+ *        no field delimiter/separator
  *
  * Copyright (c) 2010-2011, PostgreSQL Global Development Group
  *
@@ -25,6 +26,7 @@
 #include "foreign/foreign.h"
 #include "miscadmin.h"
 #include "optimizer/cost.h"
+#include "mb/pg_wchar.h"
 #include "storage/fd.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
@@ -50,6 +52,7 @@ static struct FileFixedLengthFdwOption valid_options[] = {
     /* File options */
     { "filename",       ForeignTableRelationId },
 	{ "field_lengths",  ForeignTableRelationId },
+	{ "trim",           ForeignTableRelationId }, 
 	{ "record_separator",  ForeignTableRelationId },
 	/* Sentinel */
 	{ NULL,			InvalidOid }
@@ -76,6 +79,7 @@ typedef struct FileFixedLengthFdwExecutionState
 	int   total_field_length;
 	int read_len;
 	record_sep sep;
+	bool  trim_all_fields;
 	/* work space */
 	char           *read_buf;
     Datum          *text_array_values;
@@ -155,7 +159,7 @@ file_fixed_length_fdw_validator(PG_FUNCTION_ARGS)
 	Oid			catalog = PG_GETARG_OID(1);
 	char	   *filename = NULL;
 	long int   *field_lengths = NULL;
-	int         nfields;
+	bool        got_trim = false;
     int         rsep = -1;
 	ListCell   *cell;
 
@@ -219,7 +223,16 @@ file_fixed_length_fdw_validator(PG_FUNCTION_ARGS)
 				ereport(ERROR,
 						(errcode(ERRCODE_SYNTAX_ERROR),
 						 errmsg("conflicting or redundant options")));
-			nfields = getFieldLengths(defGetString(def), &field_lengths);
+			(void) getFieldLengths(defGetString(def), &field_lengths);
+		}
+		else if (strcmp(def->defname, "trim") == 0)
+		{
+			if (got_trim)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options")));
+			got_trim = true;
+			(void) defGetBoolean(def);
 		}
 		else if (strcmp(def->defname, "record_separator") == 0)
 		{
@@ -471,6 +484,7 @@ file_fixed_lengthBeginForeignScan(ForeignScanState *node, int eflags)
 				 errmsg("unable to open file")));
 
 	festate->sep = RS_LF; /* default */
+	festate->trim_all_fields = false;
 	foreach(lc, options)
 	{
 		DefElem	   *def = (DefElem *) lfirst(lc);
@@ -484,6 +498,10 @@ file_fixed_lengthBeginForeignScan(ForeignScanState *node, int eflags)
 			for (i = 0; i < festate->nfields; i++)
 				tlen += festate->field_lengths[i];
 			festate->total_field_length = tlen;
+		}
+		else if (strcmp(def->defname, "trim") == 0)
+		{
+			festate->trim_all_fields = defGetBoolean(def);
 		}
 		else if (strcmp(def->defname, "record_separator") == 0)
 		{
@@ -710,8 +728,7 @@ check_table_shape(Relation rel)
 static bool
 NextFixedLengthRawFields(FileFixedLengthFdwExecutionState *festate)
 {
-	int nread, i;
-	char *pos = festate->read_buf;
+	int nread;
 
 	nread = fread(festate->read_buf, sizeof(char), festate->read_len, festate->source);
 	if (nread == 0 && feof(festate->source))
@@ -749,12 +766,29 @@ makeTextArray(FileFixedLengthFdwExecutionState *festate, TupleTableSlot *slot)
 
 	for (fld=0; fld < fldct; fld++)
 	{
+		char * start = string;
+		int  len = festate->field_lengths[fld];
+		int  slen = len, i;
+
+		if (festate->trim_all_fields)
+		{
+			/* skip leading and trailing spaces if required */
+			for (i = 0; i < slen && *start == ' '; i++)
+			{
+					start++;
+					len--;
+			}
+			while(len > 0 && start[len-1] == ' ')
+				len--;
+		}
+
 
 		/* make sure encoding is OK, including no null bytes */
-		(void) pg_verifymbstr(string, festate->field_lengths[fld], false);
+		(void) pg_verifymbstr(start, len, false);
+		
  
 		values[fld] = PointerGetDatum(
-			cstring_to_text_with_len(string, festate->field_lengths[fld]));
+			cstring_to_text_with_len(start, len));
 
 		string += festate->field_lengths[fld];
 	}
