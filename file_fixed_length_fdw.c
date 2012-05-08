@@ -84,6 +84,7 @@ typedef struct FileFixedLengthFdwExecutionState
 	char           *read_buf;
     Datum          *text_array_values;
     bool           *text_array_nulls;	
+	int             recnum;
 } FileFixedLengthFdwExecutionState;
 
 /*
@@ -483,6 +484,8 @@ file_fixed_lengthBeginForeignScan(ForeignScanState *node, int eflags)
 				(errcode(ERRCODE_FDW_UNABLE_TO_CREATE_REPLY),
 				 errmsg("unable to open file")));
 
+	festate->recnum = 0;
+
 	festate->sep = RS_LF; /* default */
 	festate->trim_all_fields = false;
 	foreach(lc, options)
@@ -569,6 +572,7 @@ file_fixed_lengthIterateForeignScan(ForeignScanState *node)
 	 */
 	ExecClearTuple(slot);
 
+	festate->recnum += 1;
 	found = NextFixedLengthRawFields(festate);
 
 	if (found)
@@ -586,7 +590,12 @@ file_fixed_lengthIterateForeignScan(ForeignScanState *node)
 static void
 file_fixed_lengthErrorCallback(void *arg)
 {
-	/* XXX fill in */
+
+	FileFixedLengthFdwExecutionState *festate = (FileFixedLengthFdwExecutionState *) arg;
+
+	errcontext("Fixed Length Foreign Table filename: '%s' record: %d",
+			   festate->filename, festate->recnum);
+
 }
 
 /*
@@ -614,6 +623,7 @@ file_fixed_lengthReScanForeignScan(ForeignScanState *node)
 
 	FreeFile(festate->source);
 	festate->source = AllocateFile(festate->filename,PG_BINARY_R);
+	festate->recnum = 0;
 }
 
 /*
@@ -737,8 +747,6 @@ NextFixedLengthRawFields(FileFixedLengthFdwExecutionState *festate)
 			ereport(ERROR,
 				(errcode(ERRCODE_FDW_INVALID_STRING_LENGTH_OR_BUFFER_LENGTH),
 				 errmsg("error reading fixed length record")));
-
-	/* XXX todo: check record seps, etc */
 
 	return true;
 }
