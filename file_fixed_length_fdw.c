@@ -815,7 +815,7 @@ makeTextArray(FileFixedLengthFdwExecutionState *festate, TupleTableSlot *slot)
 		 * current server encoding.
 		 */
 		values[fld] = PointerGetDatum(
-			cstring_to_text(pg_any_to_server(start, len, festate->encoding));
+			  cstring_to_text(pg_any_to_server(start, len, festate->encoding)));
 
 		string += festate->field_lengths[fld];
 	}
