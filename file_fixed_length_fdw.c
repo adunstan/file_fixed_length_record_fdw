@@ -54,6 +54,7 @@ static struct FileFixedLengthFdwOption valid_options[] = {
 	{ "field_lengths",  ForeignTableRelationId },
 	{ "trim",           ForeignTableRelationId }, 
 	{ "record_separator",  ForeignTableRelationId },
+	{ "encoding",       ForeignTableRelationId }, 
 	/* Sentinel */
 	{ NULL,			InvalidOid }
 };
@@ -79,6 +80,7 @@ typedef struct FileFixedLengthFdwExecutionState
 	int   total_field_length;
 	int read_len;
 	record_sep sep;
+	int   encoding;
 	bool  trim_all_fields;
 	/* work space */
 	char           *read_buf;
@@ -159,6 +161,7 @@ file_fixed_length_fdw_validator(PG_FUNCTION_ARGS)
 	List	   *options_list = untransformRelOptions(PG_GETARG_DATUM(0));
 	Oid			catalog = PG_GETARG_OID(1);
 	char	   *filename = NULL;
+	char       *encoding = NULL;
 	long int   *field_lengths = NULL;
 	bool        got_trim = false;
     int         rsep = -1;
@@ -234,6 +237,18 @@ file_fixed_length_fdw_validator(PG_FUNCTION_ARGS)
 						 errmsg("conflicting or redundant options")));
 			got_trim = true;
 			(void) defGetBoolean(def);
+		}
+		else if (strcmp(def->defname, "encoding") == 0)
+		{
+			if (encoding != NULL)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options")));
+			encoding = defGetString(def);
+			if (pg_char_to_encoding(encoding) == -1)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("invalid encoding name '%s'", encoding)));
 		}
 		else if (strcmp(def->defname, "record_separator") == 0)
 		{
@@ -485,7 +500,7 @@ file_fixed_lengthBeginForeignScan(ForeignScanState *node, int eflags)
 				 errmsg("unable to open file")));
 
 	festate->recnum = 0;
-
+	festate->encoding = pg_get_client_encoding();
 	festate->sep = RS_LF; /* default */
 	festate->trim_all_fields = false;
 	foreach(lc, options)
@@ -505,6 +520,10 @@ file_fixed_lengthBeginForeignScan(ForeignScanState *node, int eflags)
 		else if (strcmp(def->defname, "trim") == 0)
 		{
 			festate->trim_all_fields = defGetBoolean(def);
+		}
+		else if (strcmp(def->defname, "encoding") == 0)
+		{
+			festate->encoding = pg_char_to_encoding(defGetString(def));
 		}
 		else if (strcmp(def->defname, "record_separator") == 0)
 		{
@@ -790,13 +809,13 @@ makeTextArray(FileFixedLengthFdwExecutionState *festate, TupleTableSlot *slot)
 				len--;
 		}
 
-
-		/* make sure encoding is OK, including no null bytes */
-		(void) pg_verifymbstr(start, len, false);
-		
- 
+		/*
+		 * pg_any_to_server will both validate that the input is
+		 * ok in the named encoding and translate it frpm that into the
+		 * current server encoding.
+		 */
 		values[fld] = PointerGetDatum(
-			cstring_to_text_with_len(start, len));
+			cstring_to_text(pg_any_to_server(start, len, festate->encoding));
 
 		string += festate->field_lengths[fld];
 	}
