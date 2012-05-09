@@ -793,7 +793,8 @@ makeTextArray(FileFixedLengthFdwExecutionState *festate, TupleTableSlot *slot)
 
 	for (fld=0; fld < fldct; fld++)
 	{
-		char * start = string;
+		char *start = string;
+		char *conv;
 		int  len = festate->field_lengths[fld];
 		int  slen = len, i;
 
@@ -813,9 +814,16 @@ makeTextArray(FileFixedLengthFdwExecutionState *festate, TupleTableSlot *slot)
 		 * pg_any_to_server will both validate that the input is
 		 * ok in the named encoding and translate it frpm that into the
 		 * current server encoding.
+		 *
+		 * If the string handed back is what we passed in it won't
+		 * be null terminated, but if we get back something else
+		 * it will be (but the length will be unknown);
 		 */
-		values[fld] = PointerGetDatum(
-			  cstring_to_text(pg_any_to_server(start, len, festate->encoding)));
+		conv = pg_any_to_server(start, len, festate->encoding);
+		if (conv == start)
+			values[fld] = PointerGetDatum(cstring_to_text_with_len(conv,len));
+		else
+			values[fld] = PointerGetDatum(cstring_to_text(conv));
 
 		string += festate->field_lengths[fld];
 	}
