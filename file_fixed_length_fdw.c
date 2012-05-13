@@ -95,6 +95,12 @@ typedef struct FileFixedLengthFdwExecutionState
 #define FLFDW_OPEN_FLAGS O_RDONLY
 #endif
 
+#ifdef WIN32
+#define flfdw_open _open
+#else
+#define flfdw_open open
+#endif
+
 /*
  * SQL functions*/
 extern Datum file_fixed_length_fdw_handler(PG_FUNCTION_ARGS);
@@ -499,7 +505,7 @@ file_fixed_lengthBeginForeignScan(ForeignScanState *node, int eflags)
 	 */
 	festate = (FileFixedLengthFdwExecutionState *) palloc(sizeof(FileFixedLengthFdwExecutionState));
 	festate->filename = filename;
-	festate->source = open(filename,FLFDW_OPEN_FLAGS);
+	festate->source = flfdw_open(filename,FLFDW_OPEN_FLAGS);
 	if (festate->source == -1)
 		ereport(ERROR,
 				(errcode(ERRCODE_FDW_UNABLE_TO_CREATE_REPLY),
@@ -647,7 +653,7 @@ file_fixed_lengthReScanForeignScan(ForeignScanState *node)
 	FileFixedLengthFdwExecutionState *festate = (FileFixedLengthFdwExecutionState *) node->fdw_state;
 
 	close(festate->source);
-	festate->source = open(festate->filename,FLFDW_OPEN_FLAGS);
+	festate->source = flfdw_open(festate->filename,FLFDW_OPEN_FLAGS);
 	festate->recnum = 0;
 }
 
