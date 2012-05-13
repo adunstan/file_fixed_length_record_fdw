@@ -74,7 +74,7 @@ typedef enum record_sep
 typedef struct FileFixedLengthFdwExecutionState
 {
 	char *filename;
-	FILE *source;
+	int   source;
 	long int *field_lengths;
 	int   nfields;
 	int   total_field_length;
@@ -88,6 +88,12 @@ typedef struct FileFixedLengthFdwExecutionState
     bool           *text_array_nulls;	
 	int             recnum;
 } FileFixedLengthFdwExecutionState;
+
+#ifdef O_BINARY
+#define FLFDW_OPEN_FLAGS O_RDONLY | O_BINARY
+#else
+#define FLFDW_OPEN_FLAGS O_RDONLY
+#endif
 
 /*
  * SQL functions*/
@@ -493,8 +499,8 @@ file_fixed_lengthBeginForeignScan(ForeignScanState *node, int eflags)
 	 */
 	festate = (FileFixedLengthFdwExecutionState *) palloc(sizeof(FileFixedLengthFdwExecutionState));
 	festate->filename = filename;
-	festate->source = AllocateFile(filename,PG_BINARY_R);
-	if (festate->source == NULL)
+	festate->source = open(filename,FLFDW_OPEN_FLAGS);
+	if (festate->source == -1)
 		ereport(ERROR,
 				(errcode(ERRCODE_FDW_UNABLE_TO_CREATE_REPLY),
 				 errmsg("unable to open file")));
@@ -628,7 +634,7 @@ file_fixed_lengthEndForeignScan(ForeignScanState *node)
 
 	/* if festate is NULL, we are in EXPLAIN; nothing to do */
 	if (festate)
-		FreeFile(festate->source);
+		close(festate->source);
 }
 
 /*
@@ -640,8 +646,8 @@ file_fixed_lengthReScanForeignScan(ForeignScanState *node)
 {
 	FileFixedLengthFdwExecutionState *festate = (FileFixedLengthFdwExecutionState *) node->fdw_state;
 
-	FreeFile(festate->source);
-	festate->source = AllocateFile(festate->filename,PG_BINARY_R);
+	close(festate->source);
+	festate->source = open(festate->filename,FLFDW_OPEN_FLAGS);
 	festate->recnum = 0;
 }
 
@@ -759,8 +765,8 @@ NextFixedLengthRawFields(FileFixedLengthFdwExecutionState *festate)
 {
 	int nread;
 
-	nread = fread(festate->read_buf, sizeof(char), festate->read_len, festate->source);
-	if (nread == 0 && feof(festate->source))
+	nread = read(festate->source, festate->read_buf, festate->read_len);
+	if (nread == 0)
 		return false;
 	else if (nread != festate->read_len)
 			ereport(ERROR,
@@ -812,7 +818,7 @@ makeTextArray(FileFixedLengthFdwExecutionState *festate, TupleTableSlot *slot)
 
 		/*
 		 * pg_any_to_server will both validate that the input is
-		 * ok in the named encoding and translate it frpm that into the
+		 * ok in the named encoding and translate it from that into the
 		 * current server encoding.
 		 *
 		 * If the string handed back is what we passed in it won't
